@@ -1,21 +1,20 @@
 import streamlit as st
 from groq import Groq
 from gtts import gTTS
-import os
 import base64
+from io import BytesIO
 
 # 1. KONFIGURASI HALAMAN WEB
 st.set_page_config(page_title="Jarvis AI Web", page_icon="🤖", layout="centered")
 
 # Modifikasi CSS agar tampilan gelap dan futuristik ala Iron Man
-# Modifikasi tampilan (CSS) agar gelap dan futuristik ala Iron Man
 st.markdown("""
     <style>
     .main { background-color: #0d1117; color: #ffffff; }
     h1 { color: #58a6ff; text-align: center; }
     .stTextInput i { color: #58a6ff; }
     </style>
-    """, unsafe_allow_html=True)  # <-- Bagian ini sudah diperbaiki memakai unsafe_allow_html
+    """, unsafe_allow_html=True)
 st.title("🤖 JARVIS INTERACTIVE WEB")
 st.write("Selamat datang kembali, **Tony**. Ketik perintah atau pertanyaan Anda di bawah.")
 
@@ -29,55 +28,64 @@ SYSTEM_INSTRUCTION = (
     "namun tetap ramah dan membantu. Gunakan bahasa Indonesia."
 )
 
-# Inisialisasi riwayat obrolan di web browser
+# Inisialisasi riwayat obrolan di web browser jika belum ada
 if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
+    st.session_state.messages = []
 
-# 3. FUNGSI UNTUK MEMUTAR SUARA DI WEB BROWSER
+# Tempat penampung audio terisolasi agar tidak mengganggu rendering teks
+audio_placeholder = st.empty()
+
+# 3. FUNGSI UNTUK MEMUTAR SUARA LANGSUNG DARI MEMORI RAM
 def putar_suara_di_web(teks):
     tts = gTTS(text=teks, lang='id', slow=False)
-    filename = "respon_jarvis.mp3"
-    tts.save(filename)
+    fp = BytesIO()
+    tts.write_to_fp(fp)
+    fp.seek(0)
     
-    # Mengubah audio menjadi format yang bisa dibaca browser secara otomatis
-    with open(filename, "rb") as f:
-        data = f.read()
-        b64 = base64.b64encode(data).decode()
-        md = f"""
-            <audio autoplay="true">
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-            </audio>
-            """
-        st.markdown(md, unsafe_allow_html=True)
-    os.remove(filename)
+    data = fp.read()
+    b64 = base64.b64encode(data).decode()
+    md = f"""
+        <audio autoplay="true">
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        </audio>
+        """
+    audio_placeholder.markdown(md, unsafe_allow_html=True)
+
+# === TAMPILKAN RIWAYAT CHAT SEBELUMNYA ===
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else None):
+        st.write(msg["content"])
 
 # 4. TAMPILAN ANTARMUKA CHAT
 user_input = st.chat_input("Ketik sesuatu atau berikan perintah pada Jarvis...")
 
 if user_input:
-    # Tampilkan chat user di layar web
-    st.session_state.messages.append({"role": "user", "content": user_input})
+    # Ambil input dan tampilkan di UI secara langsung
     with st.chat_message("user"):
         st.write(user_input)
+    
+    # Masukkan input user ke dalam state
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    
+    # Buat format pesan untuk dikirim ke Groq Cloud
+    messages_payload = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + [
+        {"role": m["role"], "content": m["content"]} for m in st.session_state.messages
+    ]
         
-    # Kirim ke otak Groq AI
+    # Minta balasan dari Groq AI
     with st.chat_message("assistant", avatar="🤖"):
         with st.spinner("Jarvis sedang berpikir..."):
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
-                messages=st.session_state.messages,
+                messages=messages_payload,
                 temperature=0.7,
                 max_tokens=1000
             )
             jawaban = completion.choices[0].message.content
             st.write(jawaban)
             
-    # Masukkan ke riwayat dan bunyikan suaranya di browser Tony
+    # Masukkan balasan asisten ke dalam state
     st.session_state.messages.append({"role": "assistant", "content": jawaban})
+    
+    # Putar suaranya tanpa melakukan st.rerun()
     putar_suara_di_web(jawaban)
-
-# Menampilkan riwayat chat sebelumnya di layar agar keren
-for msg in st.session_state.messages:
-    if msg["role"] != "system":
-        with st.chat_message(msg["role"], avatar="🤖" if msg["role"] == "assistant" else None):
-            st.write(msg["content"])
